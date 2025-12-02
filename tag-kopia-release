@@ -1,0 +1,113 @@
+#!/usr/bin/bash
+
+# DEPENDS:
+# * app-arch/xz-utils
+# * dev-lang/go
+# * dev-util/github-cli
+
+set -euo pipefail
+
+KOPIA_REPO='kopia/kopia'
+DIST_REPO='itaiferber/gentoo-distfiles'
+
+# Options:
+USAGE="$(cat <<- EOM
+	usage: $0 [flags] [<version>]
+
+	FLAGS
+		-h, --help       Print this help message
+		-v, --verbose    Produce verbose command output
+EOM
+)"
+VERBOSE=false
+
+die() {
+	printf '%s\n' "$@"
+	exit 1
+}
+
+log() {
+	if [[ "${VERBOSE}" = true ]]; then
+		printf '%s\n' "$@"
+	fi
+}
+
+gh_get_release_tag() {
+	local repo="$1"; shift
+	gh -R "${repo}" release view --json tagName -q '.[]' "$@" 2>&1
+}
+
+gh_download_release_source() {
+	local repo="$1"; shift
+	local tag="$1"; shift
+	gh -R "${repo}" release download "${tag}" --archive=tar.gz --skip-existing "$@"
+}
+
+gh_upload_release() {
+	local repo="$1"; shift
+	local tag="$1"; shift
+	local title="$1"; shift
+	gh -R "${repo}" release create "${tag}" -t "${title}" --latest=false --notes='' "$@"
+}
+
+main() {
+	local kopia_ver=''
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+			-h|--help)
+				printf '%s\n' "${USAGE}"
+				exit
+				;;
+			-v|--verbose)
+				VERBOSE=true
+				shift
+				;;
+			*)
+				if [[ -n "$1" && -n "${kopia_ver}" ]]; then
+					die "${USAGE}"
+				fi
+
+				kopia_ver="$1"
+				shift
+				;;
+		esac
+	done
+
+	if [[ -z "${kopia_ver}" ]]; then
+		log "Fetching latest Kopia release tag"
+		kopia_ver="$(gh_get_release_tag "${KOPIA_REPO}")"
+	fi
+
+	# Kopia tags are 'vMAJOR.MINOR.PATCH'; it's easier to work with a leading 'v'
+	# removed.
+	kopia_ver="${kopia_ver/v/}"
+	log "Using Kopia release '${kopia_ver}'"
+	local release="kopia-${kopia_ver}"
+
+	local dist_tag="app-backup/${release}"
+	if [[ "$(gh_get_release_tag "${DIST_REPO}" "${dist_tag}")" == "${dist_tag}" ]]; then
+		die "${DIST_REPO} already has ${dist_tag}"
+	fi
+
+	cd "${TMPDIR:-/tmp}"
+	log "Downloading Kopia source"
+	gh_download_release_source "${KOPIA_REPO}" "v${kopia_ver}"
+	log "Extracting Kopia source"
+	tar -xf "${release}.tar.gz"
+
+	cd "${release}"
+	export GOMODCACHE="${PWD}/go-mod"
+	log "Downloading go modules to '${GOMODCACHE}'"
+	go mod download -modcacherw
+
+	local dist_file="${release}-deps.tar.xz"
+	log "Compressing go modules"
+	XZ_OPT='-T0 -9' tar -acf "${dist_file}" "go-mod"
+
+	log "Uploading ${dist_file} to ${dist_tag}"
+	gh_upload_release "${DIST_REPO}" "${dist_tag}" "${dist_file}" "${PWD}/${dist_file}"
+}
+
+main "$@"
+
+# vim: set noet ts=2 sts=2 sw=2 #
