@@ -1,0 +1,87 @@
+#!/usr/bin/bash
+
+# DEPENDS:
+# * app-arch/xz-utils
+# * dev-lang/go
+# * dev-util/github-cli
+
+set -euo pipefail
+_SCRIPTDIR="$(dirname -- "$(realpath -q -- "${0}")")"
+source "${_SCRIPTDIR}/utils/common"
+source "${_SCRIPTDIR}/utils/gh"
+
+KOPIA_REPO='kopia/kopia'
+DIST_REPO='itaiferber/gentoo-distfiles'
+
+USAGE="$(cat <<- EOM
+	usage: $0 [flags] [<version>]
+
+	FLAGS
+		-h, --help       Print this help message
+		-v, --verbose    Produce verbose command output
+EOM
+)"
+OPTS="$(getopt -o hv --long help,verbose -n "$0" -- "$@")"
+eval set -- "$OPTS"
+
+KOPIA_VER=''
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		-h|--help)
+			printf '%s\n' "${USAGE}"
+			exit
+			;;
+		-v|--verbose)
+			VERBOSITY=$((VERBOSITY+1))
+			shift
+			;;
+		--)
+			shift
+			;;
+		*)
+			[[ -z "${KOPIA_VER}" ]] || die "${USAGE}"
+			KOPIA_VER="$1"
+			shift
+			;;
+	esac
+done
+
+apply_verbosity
+
+if [[ -z "${KOPIA_VER}" ]]; then
+	log "==> Fetching latest Kopia release tag"
+	KOPIA_VER="$(gh_latest_release_tag "${KOPIA_REPO}")"
+fi
+
+# Kopia tags are 'vMAJOR.MINOR.PATCH'; it's easier to work with a leading 'v'
+# removed.
+KOPIA_VER="${KOPIA_VER/v/}"
+
+log "==> Using Kopia release '${KOPIA_VER}'"
+RELEASE="kopia-${KOPIA_VER}"
+DIST_TAG="app-backup/${RELEASE}"
+
+log "==> Checking for existing distfiles"
+! gh_has_release_tag "${DIST_REPO}" "${DIST_TAG}" ||
+	die "${DIST_REPO} already has ${DIST_TAG}"
+
+log "==> Downloading Kopia source"
+cd "${TMPDIR:-/tmp}"
+gh_download_release_source "${KOPIA_REPO}" "v${KOPIA_VER}"
+
+log "==> Extracting Kopia source"
+tar -xf "${RELEASE}.tar.gz"
+
+cd "${RELEASE}"
+export GOMODCACHE="${PWD}/go-mod"
+log "==> Downloading go modules to '${GOMODCACHE}'"
+go mod download -modcacherw
+
+log "==> Compressing go modules"
+DIST_FILE="${RELEASE}-deps.tar.xz"
+XZ_OPT='-T0 -9' tar -acf "${DIST_FILE}" "go-mod"
+
+log "==> Uploading ${DIST_FILE} to ${DIST_TAG}"
+gh_upload_release "${DIST_REPO}" "${DIST_TAG}" "${DIST_FILE}" "${PWD}/${DIST_FILE}"
+
+# vim: set tw=80 noet ts=2 sts=2 sw=2 #

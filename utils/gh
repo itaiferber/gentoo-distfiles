@@ -1,0 +1,53 @@
+#!/usr/bin/bash
+
+# shellcheck disable=SC2015
+[[ -v __GH_SOURCED ]] && return || readonly __GH_SOURCED=true
+source "${_SCRIPTDIR:="$(dirname -- "$(realpath -q -- "${0}")")"}/utils/common"
+
+# @FUNCTION: gh_download_release_source
+# @USAGE: <repo> <tag> [<gh_flag>...]
+# @DESCRIPTION:
+# Downloads the source code of the given release in the given repo as a
+# `.tar.gz` archive, skipping the download if the archive already exists.
+# Forwards additional flags to `gh` if given.
+gh_download_release_source() {
+	[[ $# -ge 2 && -n "$1" && -n "$2" ]] ||
+		die 'usage: gh_download_release_source <repo> <tag>'
+	gh -R "$1" release download "$2" --archive=tar.gz --skip-existing "${@:3}"
+}
+
+# @FUNCTION: gh_has_release_tag
+# @USAGE: <repo> <tag> [<gh_flag>...]
+# @DESCRIPTION:
+# Returns whether the given tag corresponds to a release in the given repo.
+# Forwards additional flags to `gh` if given.
+gh_has_release_tag() {
+	[[ $# -ge 2 && -n "$1" && -n "$2" ]] ||
+		die 'usage: gh_has_release_tag <repo> <tag>'
+	gh -R "$1" release view --json tagName -q '.[]' "$2" &>/dev/null "${@:3}"
+}
+
+# @FUNCTION: gh_latest_release_tag
+# @USAGE: <repo> [<gh_flag>...]
+# @DESCRIPTION:
+# Returns the tag of the release marked latest in the given GitHub repo.
+# Forwards additional flags to `gh` if given.
+gh_latest_release_tag() {
+	[[ $# -ge 1 && -n "$1" ]] || die 'usage: gh_latest_release_tag <repo>'
+	gh -R "$1" release view --json tagName -q '.[]' 2>/dev/null "${@:2}"
+}
+
+# @FUNCTION: gh_upload_release
+# @USAGE: <repo> <tag> <title> [<gh_flag>...] [<file>...]
+# @DESCRIPTION:
+# Creates a new release with the given tag and title in the given repo,
+# uploading the given files to the release. Does not mark the release as the
+# latest release, and leaves the notes field empty. Forwards additional flags to
+# `gh` if given.
+gh_upload_release() {
+	[[ $# -ge 3 && -n "$1" && -n "$2" && -n "$3" ]] ||
+		die "usage: gh_upload_release <repo> <tag> <title> [<file>...]"
+	gh -R "$1" release create "$2" -t "$3" --latest=false --notes='' "${@:4}"
+}
+
+# vim: set tw=80 noet ts=2 sts=2 sw=2 #
